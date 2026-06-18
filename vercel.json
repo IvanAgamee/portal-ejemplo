@@ -7,6 +7,10 @@
     { "source": "/api/tlaxcala", "destination": "/api/tlaxcala" },
     { "source": "/api/campeche",      "destination": "/api/campeche"      },
     { "source": "/api/quintanaroo",   "destination": "/api/quintanaroo"   },
+    { "source": "/api/michoacan",     "destination": "/api/michoacan"     },
+    { "source": "/api/chihuahua",     "destination": "/api/chihuahua"     },
+    { "source": "/api/chiapas",       "destination": "/api/chiapas"       },
+    { "source": "/api/zacatecas",     "destination": "/api/zacatecas"     },
     { "source": "/(.*)",              "destination": "/index.html"         }
   ]
 }

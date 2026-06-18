@@ -6,8 +6,8 @@ const ESTADOS = [
   { valor: 'bajacalifornia',    nombre: 'Baja California',     disponible: false },
   { valor: 'bajacaliforniasur', nombre: 'Baja California Sur', disponible: false },
   { valor: 'campeche',          nombre: 'Campeche',            disponible: true  },
-  { valor: 'chiapas',           nombre: 'Chiapas',             disponible: false },
-  { valor: 'chihuahua',         nombre: 'Chihuahua',           disponible: false },
+  { valor: 'chiapas',           nombre: 'Chiapas',             disponible: true  },
+  { valor: 'chihuahua',         nombre: 'Chihuahua',           disponible: true  },
   { valor: 'cdmx',              nombre: 'Ciudad de México',    disponible: false },
   { valor: 'coahuila',          nombre: 'Coahuila',            disponible: false },
   { valor: 'colima',            nombre: 'Colima',              disponible: false },
@@ -16,7 +16,7 @@ const ESTADOS = [
   { valor: 'guerrero',          nombre: 'Guerrero',            disponible: false },
   { valor: 'hidalgo',           nombre: 'Hidalgo',             disponible: false },
   { valor: 'jalisco',           nombre: 'Jalisco',             disponible: true  },
-  { valor: 'michoacan',         nombre: 'Michoacán',           disponible: false },
+  { valor: 'michoacan',         nombre: 'Michoacán',           disponible: true  },
   { valor: 'nayarit',           nombre: 'Nayarit',             disponible: true  },
   { valor: 'nuevoleon',         nombre: 'Nuevo León',          disponible: false },
   { valor: 'oaxaca',            nombre: 'Oaxaca',              disponible: true  },
@@ -31,7 +31,7 @@ const ESTADOS = [
   { valor: 'tlaxcala',          nombre: 'Tlaxcala',            disponible: true  },
   { valor: 'veracruz',          nombre: 'Veracruz',            disponible: false },
   { valor: 'yucatan',           nombre: 'Yucatán',             disponible: false },
-  { valor: 'zacatecas',         nombre: 'Zacatecas',           disponible: false },
+  { valor: 'zacatecas',         nombre: 'Zacatecas',           disponible: true  },
 ]
 
 const NAYARIT_ESTADOS = {
@@ -57,7 +57,8 @@ const placa        = ref('')
 const serie        = ref('')
 const motor        = ref('')
 const propietario  = ref('')
-const tipoBusqueda = ref('placa') // Oaxaca: 'placa' | 'serie'
+const tipoBusqueda   = ref('placa') // Oaxaca: 'placa' | 'serie'
+const tipoVehiculo   = ref('1')     // Chiapas: 1=Automóvil 2=Remolque 3=Motocicleta
 
 const estadoActual = computed(() =>
   ESTADOS.find(e => e.valor === estadoSeleccionado.value) ?? null
@@ -79,6 +80,10 @@ function detectarEstadoPorPlaca(val) {
   if (/^OAX/.test(p))   return 'oaxaca'
   if (/^JAL/.test(p))   return 'jalisco'
   if (/^PUE/.test(p))   return 'puebla'
+  if (/^MICH/.test(p))  return 'michoacan'
+  if (/^CHIS/.test(p))  return 'chiapas'
+  if (/^CHIH/.test(p))  return 'chihuahua'
+  if (/^ZAC/.test(p))   return 'zacatecas'
   if (/^TLA/.test(p))   return 'tlaxcala'
   if (/^QRO/.test(p))   return null          // Querétaro – no disponible
   if (/^QR/.test(p))    return 'quintanaroo'
@@ -90,6 +95,9 @@ function detectarEstadoPorPlaca(val) {
   if (/^CA/.test(p))    return 'campeche'
   if (/^PP/.test(p))    return 'puebla'
   if (/^PU/.test(p))    return 'puebla'
+  if (/^MI/.test(p))    return 'michoacan'
+  if (/^CH/.test(p))    return 'chihuahua'
+  if (/^ZA/.test(p))    return 'zacatecas'
   return null
 }
 
@@ -108,6 +116,7 @@ watch(estadoSeleccionado, () => {
     motor.value        = ''
     propietario.value  = ''
     tipoBusqueda.value = 'placa'
+    tipoVehiculo.value = '1'
     estadoDetectado.value = false
   }
   autoDetectando.value = false
@@ -150,6 +159,10 @@ async function consultar() {
     if (estadoSeleccionado.value === 'tlaxcala') await consultarTlaxcala()
     if (estadoSeleccionado.value === 'campeche')     await consultarCampeche()
     if (estadoSeleccionado.value === 'quintanaroo') await consultarQuintanaroo()
+    if (estadoSeleccionado.value === 'michoacan')   await consultarMichoacan()
+    if (estadoSeleccionado.value === 'chihuahua')   await consultarChihuahua()
+    if (estadoSeleccionado.value === 'chiapas')     await consultarChiapas()
+    if (estadoSeleccionado.value === 'zacatecas')   await consultarZacatecas()
   } catch {
     errorMsg.value = 'Error de conexión. Intenta de nuevo.'
   } finally {
@@ -157,7 +170,7 @@ async function consultar() {
   }
 }
 
-/* ── Quintana Roo ────────────────────────────────────────────────────── */
+// Quintana Roo: dos pasos HTTP, requiere placa + folio de tarjeta de circulación, parsea HTML con referencias de pago
 async function consultarQuintanaroo() {
   const res = await fetch('/api/quintanaroo', {
     method:  'POST',
@@ -178,14 +191,116 @@ async function consultarQuintanaroo() {
     return
   }
 
-  // Success: HTML response containing vehicle data and payment references
   const html = await res.text()
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const content = doc.querySelector('.lista') ?? doc.querySelector('body')
   resultado.value = { tipo: 'html', html: content?.innerHTML ?? html }
 }
 
-/* ── Campeche ────────────────────────────────────────────────────────── */
+// Chiapas: portal ASP.NET, extrae ViewState con GET previo y filtra resultados por tipo de vehículo
+async function consultarChiapas() {
+  const res = await fetch('/api/chiapas', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      placa:        placa.value.trim().toUpperCase(),
+      tipoVehiculo: tipoVehiculo.value,
+    }),
+  })
+
+  const html = await res.text()
+
+  if (html.trim().length < 500) {
+    errorMsg.value = 'Error de comunicación con el portal de Chiapas. Intenta de nuevo.'
+    return
+  }
+
+  if (html.includes('No existe registro del veh')) {
+    errorMsg.value = 'No se encontró ningún vehículo con esa placa en Chiapas.'
+    return
+  }
+
+  const doc         = new DOMParser().parseFromString(html, 'text/html')
+  const updatePanel = doc.getElementById('main_holder_updatePanel')
+  resultado.value   = { tipo: 'html', html: updatePanel?.innerHTML ?? html }
+}
+
+// Chihuahua: portal Java, requiere JSESSIONID del GET inicial; decodifica la respuesta de ISO-8859-1 a UTF-8
+async function consultarChihuahua() {
+  const res = await fetch('/api/chihuahua', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ placa: placa.value.trim().toUpperCase() }),
+  })
+
+  const html = await res.text()
+  const doc  = new DOMParser().parseFromString(html, 'text/html')
+
+  const bodyText = doc.body?.innerText ?? doc.body?.textContent ?? ''
+  if (bodyText.includes('no se encuentra registrado')) {
+    errorMsg.value = 'No se encontró ningún vehículo con esa placa en Chihuahua.'
+    return
+  }
+  if (bodyText.includes('La sesi') && bodyText.includes('ha terminado')) {
+    errorMsg.value = 'Error de sesión con el portal de Chihuahua. Intenta de nuevo.'
+    return
+  }
+
+  const table = doc.querySelector('table.tabla4') ?? doc.querySelector('table') ?? doc.body
+  resultado.value = { tipo: 'html', html: table?.innerHTML ?? html }
+}
+
+// Michoacán: portal PHP con CSRF obligatorio; extrae el token del GET inicial y lo envía junto con placa y serie
+async function consultarMichoacan() {
+  const res = await fetch('/api/michoacan', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      placa: placa.value.trim().toUpperCase(),
+      serie: serie.value.trim().toUpperCase(),
+    }),
+  })
+
+  const html = await res.text()
+
+  if (html.trim().length < 100) {
+    errorMsg.value = 'Error de comunicación con el portal de Michoacán. Intenta de nuevo.'
+    return
+  }
+
+  const doc     = new DOMParser().parseFromString(html, 'text/html')
+  const content = doc.getElementById('div-veh-msg')
+
+  if (!content?.innerHTML?.trim()) {
+    errorMsg.value = 'No se encontró ningún vehículo con esa placa y número de serie en Michoacán.'
+    return
+  }
+
+  resultado.value = { tipo: 'html', html: content.innerHTML }
+}
+
+// Zacatecas: API REST JSON directa, un solo GET por placa + VIN, sin sesión ni tokens previos
+async function consultarZacatecas() {
+  const res = await fetch('/api/zacatecas', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      placa: placa.value.trim().toUpperCase(),
+      vin:   serie.value.trim().toUpperCase(),
+    }),
+  })
+
+  const data = await res.json()
+
+  if (!res.ok) {
+    errorMsg.value = data.mensaje ?? 'No se encontró ningún vehículo con esa placa y VIN en Zacatecas.'
+    return
+  }
+
+  resultado.value = { tipo: 'zacatecas', data }
+}
+
+// Campeche: API REST JSON, devuelve lista de vehículos con indicador de adeudos por placa y serie
 async function consultarCampeche() {
   const res  = await fetch('/api/campeche', {
     method:  'POST',
@@ -205,7 +320,7 @@ async function consultarCampeche() {
   resultado.value = { tipo: 'campeche', vehiculos: data.content }
 }
 
-/* ── Tlaxcala ────────────────────────────────────────────────────────── */
+// Tlaxcala: envía NIV + placa en form-encoded, toma el último panel-body del HTML de respuesta
 async function consultarTlaxcala() {
   const body = new URLSearchParams({
     niv:   serie.value.trim().toUpperCase(),
@@ -225,13 +340,12 @@ async function consultarTlaxcala() {
   }
 
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  // Find the second panel-body which holds vehicle data and adeudos panels
   const panelBodies = doc.querySelectorAll('.panel-body')
   const resultPanel = panelBodies[panelBodies.length - 1]
   resultado.value = { tipo: 'html', html: resultPanel?.innerHTML ?? html }
 }
 
-/* ── Puebla ──────────────────────────────────────────────────────────── */
+// Puebla: API REST JSON, devuelve datos del vehículo y lista de adeudos detallada por placa y serie
 async function consultarPuebla() {
   const res  = await fetch('/api/puebla', {
     method:  'POST',
@@ -251,7 +365,7 @@ async function consultarPuebla() {
   resultado.value = { tipo: 'puebla', data }
 }
 
-/* ── Oaxaca ──────────────────────────────────────────────────────────── */
+// Oaxaca: admite búsqueda por placa o por número de serie; extrae el bloque del trámite del HTML de respuesta
 async function consultarOaxaca() {
   const body = new URLSearchParams({
     placa: tipoBusqueda.value === 'placa' ? placa.value.trim().toUpperCase() : '',
@@ -275,7 +389,7 @@ async function consultarOaxaca() {
   resultado.value = { tipo: 'html', html: content?.innerHTML ?? html }
 }
 
-/* ── Nayarit ─────────────────────────────────────────────────────────── */
+// Nayarit: API REST JSON pública; devuelve estado operativo del vehículo con código numérico por placa
 async function consultarNayarit() {
   const placaVal = placa.value.trim().toUpperCase()
   const res  = await fetch(`/api/nayarit?numero_de_placa_vigente=${encodeURIComponent(placaVal)}`)
@@ -294,7 +408,7 @@ async function consultarNayarit() {
   }
 }
 
-/* ── Jalisco ─────────────────────────────────────────────────────────── */
+// Jalisco: requiere los cuatro datos de la tarjeta de circulación; parsea HTML con tabla de adeudos
 async function consultarJalisco() {
   const body = new URLSearchParams({
     origen:           'normal',
@@ -348,6 +462,18 @@ const formularioValido = computed(() => {
   }
   if (estadoSeleccionado.value === 'quintanaroo') {
     return placa.value.trim().length >= 3 && serie.value.trim().length >= 1
+  }
+  if (estadoSeleccionado.value === 'michoacan') {
+    return placa.value.trim().length >= 3 && serie.value.trim().length >= 5
+  }
+  if (estadoSeleccionado.value === 'chihuahua') {
+    return placa.value.trim().length >= 3
+  }
+  if (estadoSeleccionado.value === 'chiapas') {
+    return placa.value.trim().length >= 3
+  }
+  if (estadoSeleccionado.value === 'zacatecas') {
+    return placa.value.trim().length >= 3 && serie.value.trim().length >= 3
   }
   return false
 })
@@ -557,6 +683,60 @@ const formularioValido = computed(() => {
           </div>
         </template>
 
+        <template v-else-if="estadoSeleccionado === 'chiapas'">
+          <div class="field">
+            <label class="label" for="tipo-chias">Tipo de vehículo</label>
+            <select
+              id="tipo-chias"
+              v-model="tipoVehiculo"
+              class="select"
+            >
+              <option value="1">Automóvil</option>
+              <option value="2">Remolque</option>
+              <option value="3">Motocicleta</option>
+            </select>
+          </div>
+        </template>
+
+        <template v-else-if="estadoSeleccionado === 'chihuahua'">
+          <div class="info-banner">
+            Chihuahua solo requiere el número de placa. También puedes consultar con el folio de permiso para circular.
+          </div>
+        </template>
+
+        <template v-else-if="estadoSeleccionado === 'michoacan'">
+          <div class="field">
+            <label class="label" for="serie-mich">Número de serie (mín. 5 caracteres)</label>
+            <input
+              id="serie-mich"
+              v-model="serie"
+              class="input"
+              type="text"
+              placeholder="Últimos 5 o más caracteres del NIV"
+              maxlength="17"
+              @input="serie = serie.toUpperCase()"
+            />
+          </div>
+        </template>
+
+        <template v-else-if="estadoSeleccionado === 'zacatecas'">
+          <div class="info-banner">
+            Zacatecas requiere los últimos 5 caracteres del VIN/NIV además de la placa.
+          </div>
+          <div class="field">
+            <label class="label" for="vin-zac">VIN / Número de serie (últimos 5 caracteres)</label>
+            <input
+              id="vin-zac"
+              v-model="serie"
+              class="input"
+              type="text"
+              placeholder="Últimos 5 caracteres del NIV"
+              maxlength="17"
+              @input="serie = serie.toUpperCase()"
+            />
+          </div>
+        </template>
+
         <!-- Botón -->
         <button
           v-if="estadoActual?.disponible"
@@ -675,6 +855,59 @@ const formularioValido = computed(() => {
             <div v-for="(a, i) in resultado.data.Adeudos" :key="i" class="adeudo-item">
               <span class="adeudo-desc">{{ a.vchDescripcion ?? a.descripcion ?? `Adeudo ${i + 1}` }}</span>
               <span class="adeudo-monto">${{ Number(a.mImporte ?? a.importe ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2 }) }}</span>
+            </div>
+          </div>
+        </template>
+        <div v-else class="status-badge ok" style="margin-top:1rem">
+          Sin adeudos registrados
+        </div>
+      </div>
+
+      <!-- Zacatecas: resultado estructurado -->
+      <div v-else-if="resultado?.tipo === 'zacatecas'" class="card result-card">
+        <div class="result-icon ok">✓</div>
+        <p class="result-title">Vehículo encontrado en Zacatecas</p>
+
+        <div class="vehiculo-grid">
+          <div class="vehiculo-item">
+            <span class="vitem-label">Placa</span>
+            <span class="vitem-val">{{ resultado.data.vehiculo?.placa ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item">
+            <span class="vitem-label">Año</span>
+            <span class="vitem-val">{{ resultado.data.vehiculo?.anio ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item">
+            <span class="vitem-label">Marca</span>
+            <span class="vitem-val">{{ resultado.data.vehiculo?.marca ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item">
+            <span class="vitem-label">Modelo</span>
+            <span class="vitem-val">{{ resultado.data.vehiculo?.modelo ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item" style="grid-column: span 2">
+            <span class="vitem-label">Propietario</span>
+            <span class="vitem-val">{{ resultado.data.contribuyente?.nombre ?? '—' }}</span>
+          </div>
+        </div>
+
+        <template v-if="resultado.data.tenenciaContribucionList?.length">
+          <p class="adeudos-titulo">Adeudos pendientes</p>
+          <div class="adeudos-lista">
+            <div v-for="(t, i) in resultado.data.tenenciaContribucionList" :key="i" class="adeudo-item">
+              <div style="flex:1">
+                <div style="font-weight:600;margin-bottom:0.25rem">{{ t.contribucion }} {{ t.ejercicio }}</div>
+                <div v-if="t.tenenciaConceptoList?.length" style="font-size:0.8rem;color:#777">
+                  <span v-for="(c, j) in t.tenenciaConceptoList" :key="j" style="display:block">
+                    {{ c.concepto }}: ${{ Number(c.importe ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2 }) }}
+                  </span>
+                </div>
+              </div>
+              <span class="adeudo-monto">${{ Number(t.importe ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2 }) }}</span>
+            </div>
+            <div class="adeudo-item" style="background:#ffebee;border-color:#ef9a9a">
+              <span class="adeudo-desc" style="font-weight:700">Total</span>
+              <span class="adeudo-monto">${{ Number(resultado.data.total ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2 }) }}</span>
             </div>
           </div>
         </template>
