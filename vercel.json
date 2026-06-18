@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    { "source": "/api/oaxaca",  "destination": "/api/oaxaca"  },
+    { "source": "/api/jalisco", "destination": "/api/jalisco" },
+    { "source": "/api/nayarit", "destination": "/api/nayarit" },
+    { "source": "/api/puebla",   "destination": "/api/puebla"   },
+    { "source": "/api/tlaxcala", "destination": "/api/tlaxcala" },
+    { "source": "/api/campeche",      "destination": "/api/campeche"      },
+    { "source": "/api/quintanaroo",   "destination": "/api/quintanaroo"   },
+    { "source": "/(.*)",              "destination": "/index.html"         }
+  ]
+}
