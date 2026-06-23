@@ -1,24 +1,29 @@
+const BASE = 'https://rl.puebla.gob.mx'
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const { placa = '', serie = '' } = req.body ?? {}
+  const { placa = '', serie = '', folio = '' } = req.body ?? {}
+
+  const params = new URLSearchParams({
+    placa:       placa.trim().toUpperCase(),
+    numeroserie: serie.trim().toUpperCase(),
+    folio:       folio.trim(),
+  })
 
   const upstream = await fetch(
-    'https://rl.puebla.gob.mx/api/AdeudoVehicular/CheckDebt',
+    `${BASE}/api/ControlVehicular/ConsultaPagos?${params}`,
     {
-      method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Referer': 'https://rl.puebla.gob.mx/AdeudoVehicular',
-        'User-Agent': 'Mozilla/5.0',
+        'Accept':     'application/json',
+        'Referer':    `${BASE}/PagosVehiculo`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
-      body: JSON.stringify({ placa, serie, captcha: '' }),
     }
   )
 
   const data = await upstream.json()
-  res.status(200).json(data)
+  res.status(upstream.status).json(data)
 }

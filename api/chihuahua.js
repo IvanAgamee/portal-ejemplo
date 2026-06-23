@@ -1,12 +1,11 @@
 // URLs del portal de adeudos vehiculares de Chihuahua (servidor Java/JSP).
-// Son dos URLs distintas: la primera carga la página principal y genera la sesión,
-// la segunda recibe la consulta por placa.
+
+// Carga la página principal y genera la sesión
 const PORTAL_URL = 'https://ipagos.chihuahua.gob.mx/consultas/adeudo/principal.jsp'
+// Recibe la consulta por placa.
 const QUERY_URL  = 'https://ipagos.chihuahua.gob.mx/consultas/adeudo/loginAdeudo.jsp'
 
 // Extrae las cookies de la cabecera Set-Cookie de una respuesta HTTP.
-// Es necesario porque el portal puede enviar varias cookies separadas por coma
-// y hay que limpiar los atributos extra (Path, HttpOnly, etc.) para reenviarlas.
 function extractCookies(headers) {
   const raw = headers.get('set-cookie') ?? ''
   if (!raw) return ''
@@ -16,14 +15,13 @@ function extractCookies(headers) {
     .join('; ')
 }
 
-// Función principal que Vercel ejecuta cuando llega una petición a /api/chihuahua.
 // Recibe la placa desde el frontend y devuelve el HTML del resultado.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const { placa = '' } = req.body ?? {}
 
-  // Paso 1: cargar la página principal del portal para que el servidor Java
+  // Cargar la página principal del portal para que el servidor Java
   // genere una cookie de sesión (JSESSIONID). Sin ella, el POST siguiente
   // es rechazado porque el servidor no reconoce al visitante.
   const step1 = await fetch(PORTAL_URL, {
@@ -36,7 +34,7 @@ export default async function handler(req, res) {
 
   const cookieHeader = extractCookies(step1.headers)
 
-  // Paso 2: enviar la placa al portal usando la sesión obtenida en el paso anterior.
+  // Envia la placa al portal usando la sesión obtenida  
   const step2 = await fetch(QUERY_URL, {
     method: 'POST',
     headers: {
@@ -53,9 +51,7 @@ export default async function handler(req, res) {
       Login:   'Entrar',
     }).toString(),
   })
-
-  // El portal responde en ISO-8859-1 (encoding antiguo). Si se envía tal cual,
-  // los acentos y la ñ se verían como caracteres extraños en el navegador.
+  
   // Se decodifica manualmente y se reenvía como UTF-8.
   const buffer = await step2.arrayBuffer()
   const html   = new TextDecoder('iso-8859-1').decode(buffer)

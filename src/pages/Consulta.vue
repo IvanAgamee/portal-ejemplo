@@ -8,12 +8,12 @@ const ESTADOS = [
   { valor: 'campeche',          nombre: 'Campeche',            disponible: true  },
   { valor: 'chiapas',           nombre: 'Chiapas',             disponible: true  },
   { valor: 'chihuahua',         nombre: 'Chihuahua',           disponible: true  },
-  { valor: 'cdmx',              nombre: 'Ciudad de México',    disponible: false },
+  { valor: 'cdmx',              nombre: 'Ciudad de México',    disponible: true  },
   { valor: 'coahuila',          nombre: 'Coahuila',            disponible: false },
   { valor: 'colima',            nombre: 'Colima',              disponible: false },
   { valor: 'durango',           nombre: 'Durango',             disponible: false },
   { valor: 'guanajuato',        nombre: 'Guanajuato',          disponible: false },
-  { valor: 'guerrero',          nombre: 'Guerrero',            disponible: false },
+  { valor: 'guerrero',          nombre: 'Guerrero',            disponible: true  },
   { valor: 'hidalgo',           nombre: 'Hidalgo',             disponible: false },
   { valor: 'jalisco',           nombre: 'Jalisco',             disponible: true  },
   { valor: 'michoacan',         nombre: 'Michoacán',           disponible: true  },
@@ -60,6 +60,12 @@ const propietario  = ref('')
 const tipoBusqueda   = ref('placa') // Oaxaca: 'placa' | 'serie'
 const tipoVehiculo   = ref('1')     // Chiapas: 1=Automóvil 2=Remolque 3=Motocicleta
 
+// CDMX captcha state
+const cdmxCaptchaImage    = ref('')
+const cdmxSessionToken    = ref('')
+const cdmxCaptchaCode     = ref('')
+const cdmxCargandoCaptcha = ref(false)
+
 const estadoActual = computed(() =>
   ESTADOS.find(e => e.valor === estadoSeleccionado.value) ?? null
 )
@@ -87,6 +93,7 @@ function detectarEstadoPorPlaca(val) {
   if (/^TLA/.test(p))   return 'tlaxcala'
   if (/^QRO/.test(p))   return null          // Querétaro – no disponible
   if (/^QR/.test(p))    return 'quintanaroo'
+  if (/^GR/.test(p))    return 'guerrero'
   if (/^TL/.test(p))    return 'tlaxcala'
   if (/^JA/.test(p))    return 'jalisco'
   if (/^OA/.test(p))    return 'oaxaca'
@@ -107,11 +114,10 @@ function onEstadoManual() {
   estadoDetectado.value = false
 }
 
-watch(estadoSeleccionado, () => {
+watch(estadoSeleccionado, (newVal, oldVal) => {
   resultado.value = null
   errorMsg.value  = ''
   if (!autoDetectando.value) {
-    // Cambio manual: limpiar campos adicionales pero conservar la placa
     serie.value        = ''
     motor.value        = ''
     propietario.value  = ''
@@ -120,6 +126,13 @@ watch(estadoSeleccionado, () => {
     estadoDetectado.value = false
   }
   autoDetectando.value = false
+
+  if (newVal === 'cdmx') cargarCaptchaCdmx()
+  if (oldVal === 'cdmx') {
+    cdmxCaptchaImage.value = ''
+    cdmxSessionToken.value = ''
+    cdmxCaptchaCode.value  = ''
+  }
 })
 
 watch(placa, (val) => {
@@ -163,6 +176,8 @@ async function consultar() {
     if (estadoSeleccionado.value === 'chihuahua')   await consultarChihuahua()
     if (estadoSeleccionado.value === 'chiapas')     await consultarChiapas()
     if (estadoSeleccionado.value === 'zacatecas')   await consultarZacatecas()
+    if (estadoSeleccionado.value === 'guerrero')    await consultarGuerrero()
+    if (estadoSeleccionado.value === 'cdmx')        await consultarCdmx()
   } catch {
     errorMsg.value = 'Error de conexión. Intenta de nuevo.'
   } finally {
@@ -345,7 +360,7 @@ async function consultarTlaxcala() {
   resultado.value = { tipo: 'html', html: resultPanel?.innerHTML ?? html }
 }
 
-// Puebla: API REST JSON, devuelve datos del vehículo y lista de adeudos detallada por placa y serie
+// Puebla: consulta control vehicular (derechos de registro), requiere placa + serie + folio de tarjeta de circulación
 async function consultarPuebla() {
   const res  = await fetch('/api/puebla', {
     method:  'POST',
@@ -353,12 +368,13 @@ async function consultarPuebla() {
     body: JSON.stringify({
       placa: placa.value.trim().toUpperCase(),
       serie: serie.value.trim().toUpperCase(),
+      folio: motor.value.trim(),
     }),
   })
   const data = await res.json()
 
-  if (!data.bResultado) {
-    errorMsg.value = 'No se encontró ningún vehículo con esa placa y número de serie en Puebla.'
+  if (data.error || !data.Plate) {
+    errorMsg.value = 'No se encontró ningún vehículo con esa placa, serie y folio en Puebla.'
     return
   }
 
@@ -439,6 +455,87 @@ async function consultarJalisco() {
   resultado.value = { tipo: 'html', html: contenido?.innerHTML ?? html }
 }
 
+// Guerrero: AJAX JSON directo, sin sesión previa; requiere placa + número de serie
+async function consultarGuerrero() {
+  const res = await fetch('/api/guerrero', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      placa: placa.value.trim().toUpperCase(),
+      serie: serie.value.trim().toUpperCase(),
+    }),
+  })
+
+  const data = await res.json()
+
+  if (!data.encontrado) {
+    errorMsg.value = data.mensaje ?? 'No se encontró ningún vehículo con esa placa y número de serie en Guerrero.'
+    return
+  }
+
+  resultado.value = { tipo: 'guerrero', liquidacion: data.liquidacion, mensajeHtml: data.mensajeHtml, vehiculo: data.vehiculo }
+}
+
+// CDMX: captcha de imagen en dos pasos; la sesión se consume con cada consulta
+async function cargarCaptchaCdmx() {
+  cdmxCaptchaImage.value    = ''
+  cdmxSessionToken.value    = ''
+  cdmxCaptchaCode.value     = ''
+  cdmxCargandoCaptcha.value = true
+  try {
+    const res  = await fetch('/api/cdmx', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'init' }),
+    })
+    const data = await res.json()
+    if (data.error) { errorMsg.value = data.error; return }
+    cdmxCaptchaImage.value = data.captchaImage
+    cdmxSessionToken.value = data.sessionToken
+  } catch {
+    errorMsg.value = 'No se pudo cargar el captcha de CDMX. Intenta de nuevo.'
+  } finally {
+    cdmxCargandoCaptcha.value = false
+  }
+}
+
+async function consultarCdmx() {
+  const res = await fetch('/api/cdmx', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action:       'consulta',
+      placa:        placa.value.trim().toUpperCase(),
+      captchaCode:  cdmxCaptchaCode.value.trim(),
+      sessionToken: cdmxSessionToken.value,
+    }),
+  })
+
+  const data = await res.json()
+
+  // Session is consumed after every query — always refresh captcha
+  cargarCaptchaCdmx()
+
+  if (data.error) { errorMsg.value = data.error; return }
+
+  if (data.captcha_code) {
+    errorMsg.value = 'Captcha incorrecto. Se cargó un nuevo captcha.'
+    return
+  }
+
+  if (!res.ok) {
+    errorMsg.value = data.message ?? 'Error al consultar en CDMX. Intenta de nuevo.'
+    return
+  }
+
+  if (data.status && data.status !== 'valido') {
+    errorMsg.value = data.msg ?? 'No se encontró ningún vehículo con esa placa en CDMX.'
+    return
+  }
+
+  resultado.value = { tipo: 'cdmx', data }
+}
+
 const formularioValido = computed(() => {
   if (!estadoSeleccionado.value) return false
   if (estadoSeleccionado.value === 'oaxaca') {
@@ -452,7 +549,7 @@ const formularioValido = computed(() => {
            propietario.value.trim().length >= 2
   }
   if (estadoSeleccionado.value === 'puebla') {
-    return placa.value.trim().length >= 3 && serie.value.trim().length >= 5
+    return placa.value.trim().length >= 3 && serie.value.trim().length >= 5 && motor.value.trim().length >= 5
   }
   if (estadoSeleccionado.value === 'tlaxcala') {
     return placa.value.trim().length >= 3 && serie.value.trim().length >= 5
@@ -475,6 +572,12 @@ const formularioValido = computed(() => {
   if (estadoSeleccionado.value === 'zacatecas') {
     return placa.value.trim().length >= 3 && serie.value.trim().length >= 3
   }
+  if (estadoSeleccionado.value === 'guerrero') {
+    return placa.value.trim().length >= 3 && serie.value.trim().length >= 5
+  }
+  if (estadoSeleccionado.value === 'cdmx') {
+    return placa.value.trim().length >= 3 && cdmxCaptchaCode.value.trim().length >= 2 && !!cdmxSessionToken.value
+  }
   return false
 })
 </script>
@@ -488,8 +591,8 @@ const formularioValido = computed(() => {
         <RouterLink to="/" class="back-link">
           <span class="back-arrow">&#8592;</span> Regresar
         </RouterLink>
-        <h1>CONSULTA DE ADEUDOS</h1>
-        <p>Verifica si tu vehículo tiene adeudos pendientes</p>
+        <h1>CONSULTA VEHICULAR</h1>
+        <p>Verifica si el vehículo tiene adeudos pendientes</p>
       </div>
     </header>
 
@@ -524,21 +627,12 @@ const formularioValido = computed(() => {
             @change="onEstadoManual"
           >
             <option value="" disabled>Selecciona un estado...</option>
-            <optgroup label="Disponibles">
-              <option
-                v-for="e in ESTADOS.filter(e => e.disponible)"
-                :key="e.valor"
-                :value="e.valor"
-              >{{ e.nombre }}</option>
-            </optgroup>
-            <optgroup label="Próximamente">
-              <option
-                v-for="e in ESTADOS.filter(e => !e.disponible)"
-                :key="e.valor"
-                :value="e.valor"
-                disabled
-              >{{ e.nombre }}</option>
-            </optgroup>
+            <option
+              v-for="e in ESTADOS"
+              :key="e.valor"
+              :value="e.valor"
+              :disabled="!e.disponible"
+            >{{ e.nombre }}</option>
           </select>
           <div v-if="estadoDetectado" class="detect-badge">
             ✓ Estado detectado automáticamente
@@ -662,6 +756,19 @@ const formularioValido = computed(() => {
               @input="serie = serie.toUpperCase()"
             />
           </div>
+          <div class="field">
+            <label class="label" for="folio-pue">Folio de tarjeta de circulación (mín. 5 dígitos)</label>
+            <input
+              id="folio-pue"
+              v-model="motor"
+              class="input"
+              type="text"
+              inputmode="numeric"
+              placeholder="Número de folio de tu tarjeta de circulación"
+              maxlength="12"
+              @input="motor = motor.replace(/\D/g, '')"
+            />
+          </div>
         </template>
 
         <template v-else-if="estadoSeleccionado === 'quintanaroo'">
@@ -733,6 +840,49 @@ const formularioValido = computed(() => {
               placeholder="Últimos 5 caracteres del NIV"
               maxlength="17"
               @input="serie = serie.toUpperCase()"
+            />
+          </div>
+        </template>
+
+        <template v-else-if="estadoSeleccionado === 'guerrero'">
+          <div class="field">
+            <label class="label" for="serie-gro">Número de serie (mín. 5 caracteres)</label>
+            <input
+              id="serie-gro"
+              v-model="serie"
+              class="input"
+              type="text"
+              placeholder="Últimos 5 o más caracteres del NIV"
+              maxlength="20"
+              @input="serie = serie.toUpperCase()"
+            />
+          </div>
+        </template>
+
+        <template v-else-if="estadoSeleccionado === 'cdmx'">
+          <div class="info-banner">
+            Ciudad de México requiere resolver un captcha de imagen para consultar.
+          </div>
+          <div class="captcha-row">
+            <div v-if="cdmxCargandoCaptcha" class="captcha-loading">
+              <span class="spinner" style="width:16px;height:16px;border-color:rgba(109,26,42,0.25);border-top-color:#6d1a2a;"></span>
+              Cargando captcha...
+            </div>
+            <template v-else-if="cdmxCaptchaImage">
+              <img :src="cdmxCaptchaImage" class="captcha-img" alt="Captcha CDMX" />
+              <button type="button" class="btn-reload-captcha" @click="cargarCaptchaCdmx" title="Recargar captcha">&#8635;</button>
+            </template>
+          </div>
+          <div v-if="cdmxCaptchaImage" class="field">
+            <label class="label" for="cdmx-captcha">Texto del captcha</label>
+            <input
+              id="cdmx-captcha"
+              v-model="cdmxCaptchaCode"
+              class="input"
+              type="text"
+              placeholder="Ingresa el texto que ves en la imagen"
+              maxlength="10"
+              autocomplete="off"
             />
           </div>
         </template>
@@ -817,7 +967,7 @@ const formularioValido = computed(() => {
         </p>
       </div>
 
-      <!-- Puebla: resultado estructurado -->
+      <!-- Puebla: control vehicular (ConsultaPagos) -->
       <div v-else-if="resultado?.tipo === 'puebla'" class="card result-card">
         <div class="result-icon ok">✓</div>
         <p class="result-title">Vehículo encontrado en Puebla</p>
@@ -825,41 +975,42 @@ const formularioValido = computed(() => {
         <div class="vehiculo-grid puebla-grid">
           <div class="vehiculo-item">
             <span class="vitem-label">Placa</span>
-            <span class="vitem-val">{{ resultado.data.vchPlaca ?? '—' }}</span>
+            <span class="vitem-val">{{ resultado.data.Plate ?? '—' }}</span>
           </div>
           <div class="vehiculo-item">
-            <span class="vitem-label">Modelo</span>
-            <span class="vitem-val">{{ resultado.data.iModelo || '—' }}</span>
+            <span class="vitem-label">Año</span>
+            <span class="vitem-val">{{ resultado.data.YearModel ?? '—' }}</span>
           </div>
           <div class="vehiculo-item">
             <span class="vitem-label">Marca</span>
-            <span class="vitem-val">{{ resultado.data.vchMarca ?? '—' }}</span>
+            <span class="vitem-val">{{ resultado.data.Mark ?? '—' }}</span>
           </div>
           <div class="vehiculo-item">
-            <span class="vitem-label">Línea / Tipo</span>
-            <span class="vitem-val">{{ [resultado.data.vchLInea, resultado.data.vchTipo].filter(Boolean).join(' / ') || '—' }}</span>
-          </div>
-          <div class="vehiculo-item" style="grid-column: span 2">
-            <span class="vitem-label">Titular</span>
-            <span class="vitem-val">{{ resultado.data.vchNombreConcatenado ?? '—' }}</span>
+            <span class="vitem-label">Línea</span>
+            <span class="vitem-val">{{ resultado.data.Line ?? '—' }}</span>
           </div>
           <div class="vehiculo-item" style="grid-column: span 2">
             <span class="vitem-label">NIV / Número de serie</span>
-            <span class="vitem-val mono">{{ resultado.data.vchSerie ?? '—' }}</span>
+            <span class="vitem-val mono">{{ resultado.data.SerialNumber ?? '—' }}</span>
           </div>
         </div>
 
-        <template v-if="resultado.data.Adeudos?.length">
-          <p class="adeudos-titulo">Adeudos pendientes</p>
+        <template v-if="resultado.data.listReferencesPayments?.length">
+          <p class="adeudos-titulo">Historial de pagos de control vehicular</p>
           <div class="adeudos-lista">
-            <div v-for="(a, i) in resultado.data.Adeudos" :key="i" class="adeudo-item">
-              <span class="adeudo-desc">{{ a.vchDescripcion ?? a.descripcion ?? `Adeudo ${i + 1}` }}</span>
-              <span class="adeudo-monto">${{ Number(a.mImporte ?? a.importe ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2 }) }}</span>
+            <div v-for="(p, i) in resultado.data.listReferencesPayments" :key="i" class="adeudo-item">
+              <div style="flex:1">
+                <div style="font-weight:600">Ejercicio {{ p.FiscalYear }}</div>
+                <div style="font-size:0.8rem;color:#777;margin-top:0.15rem">
+                  Fecha de pago: {{ p.PaymentDate ? new Date(p.PaymentDate).toLocaleDateString('es-MX') : 'Pendiente' }}
+                </div>
+              </div>
+              <span class="ref-badge">{{ p.ReferenceId }}</span>
             </div>
           </div>
         </template>
         <div v-else class="status-badge ok" style="margin-top:1rem">
-          Sin adeudos registrados
+          Sin pagos registrados
         </div>
       </div>
 
@@ -914,6 +1065,66 @@ const formularioValido = computed(() => {
         <div v-else class="status-badge ok" style="margin-top:1rem">
           Sin adeudos registrados
         </div>
+      </div>
+
+      <!-- Guerrero: resultado estructurado + tabla HTML de liquidación -->
+      <div v-else-if="resultado?.tipo === 'guerrero'" class="card result-card">
+        <div class="result-icon ok">✓</div>
+        <p class="result-title">Vehículo encontrado en Guerrero</p>
+
+        <div class="vehiculo-grid">
+          <div class="vehiculo-item">
+            <span class="vitem-label">Placa</span>
+            <span class="vitem-val">{{ resultado.vehiculo?.Placas ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item">
+            <span class="vitem-label">Modelo</span>
+            <span class="vitem-val">{{ resultado.vehiculo?.Modelo ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item">
+            <span class="vitem-label">Clase</span>
+            <span class="vitem-val">{{ resultado.vehiculo?.Clase ?? '—' }}</span>
+          </div>
+          <div class="vehiculo-item">
+            <span class="vitem-label">Procedencia</span>
+            <span class="vitem-val">{{ resultado.vehiculo?.Procedencia ?? '—' }}</span>
+          </div>
+          <div v-if="resultado.vehiculo?.Descripcion" class="vehiculo-item" style="grid-column: span 2">
+            <span class="vitem-label">Descripción</span>
+            <span class="vitem-val">{{ resultado.vehiculo.Descripcion }}</span>
+          </div>
+        </div>
+
+        <template v-if="resultado.mensajeHtml">
+          <p class="adeudos-titulo">Liquidación de adeudos</p>
+          <div class="html-content" v-html="resultado.mensajeHtml"></div>
+        </template>
+        <div v-else class="status-badge ok" style="margin-top:1rem">
+          Sin adeudos registrados
+        </div>
+      </div>
+
+      <!-- CDMX: adeudos de tenencia + fotocívicas -->
+      <div v-else-if="resultado?.tipo === 'cdmx'" class="card result-card">
+        <div class="result-icon ok">✓</div>
+        <p class="result-title">Vehículo encontrado en CDMX</p>
+
+        <div :class="['status-badge', resultado.data.sin_derecho ? 'critico' : 'ok']">
+          {{ resultado.data.sin_derecho ? 'Con adeudos de tenencia' : 'Sin adeudos de tenencia' }}
+        </div>
+
+        <div class="vehiculo-grid" style="margin-top:0.5rem">
+          <div v-if="resultado.data.fotocivicas_verifica != null" class="vehiculo-item" style="grid-column: span 2">
+            <span class="vitem-label">FotoCívicas</span>
+            <span :class="['vitem-val', resultado.data.fotocivicas_verifica ? 'text-ok' : 'text-critico']">
+              {{ resultado.data.fotocivicas_verifica ? 'Verificado' : 'No verificado' }}
+            </span>
+          </div>
+        </div>
+
+        <p class="aviso-critico" style="margin-top:1rem">
+          Para ver el detalle y realizar el pago, visita el portal oficial de Ciudad de México en data.finanzas.cdmx.gob.mx
+        </p>
       </div>
 
       <!-- Oaxaca / Jalisco: resultado en HTML -->
@@ -1289,6 +1500,58 @@ const formularioValido = computed(() => {
   color: #b71c1c;
   margin-left: 1rem;
   white-space: nowrap;
+}
+
+/* ── Referencia de pago badge ───────────────────────────────────────── */
+.ref-badge {
+  font-size: 0.72rem;
+  font-family: monospace;
+  color: #666;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  white-space: nowrap;
+  margin-left: 0.75rem;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── CDMX captcha ───────────────────────────────────────────────────── */
+.captcha-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 64px;
+}
+
+.captcha-img {
+  height: 60px;
+  border: 1.5px solid #ddd;
+  border-radius: 6px;
+  display: block;
+}
+
+.btn-reload-captcha {
+  padding: 0.4rem 0.75rem;
+  border: 1.5px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 1.3rem;
+  color: #6d1a2a;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.15s;
+}
+.btn-reload-captcha:hover { background: #f5f0f0; }
+
+.captcha-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: #888;
 }
 
 /* ── Auto-detect badge ──────────────────────────────────────────────── */

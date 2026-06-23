@@ -11,6 +11,8 @@
     { "source": "/api/chihuahua",     "destination": "/api/chihuahua"     },
     { "source": "/api/chiapas",       "destination": "/api/chiapas"       },
     { "source": "/api/zacatecas",     "destination": "/api/zacatecas"     },
+    { "source": "/api/guerrero",      "destination": "/api/guerrero"      },
+    { "source": "/api/cdmx",          "destination": "/api/cdmx"          },
     { "source": "/(.*)",              "destination": "/index.html"         }
   ]
 }

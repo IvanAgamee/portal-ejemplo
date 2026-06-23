@@ -7,6 +7,7 @@ const CHIH_PORTAL    = 'https://ipagos.chihuahua.gob.mx/consultas/adeudo/princip
 const CHIH_QUERY     = 'https://ipagos.chihuahua.gob.mx/consultas/adeudo/loginAdeudo.jsp'
 const CHIAS_URL      = 'https://soluciones.finanzaschiapas.gob.mx/liquidacion_vehicular/default.aspx'
 const ZACATECAS_BASE = 'https://portaltributario.zacatecas.gob.mx'
+const CDMX_BASE      = 'https://data.finanzas.cdmx.gob.mx'
 
 function extractCookiesDev(headers) {
   const raw = headers.get('set-cookie') ?? ''
@@ -287,6 +288,113 @@ function chiapasDevPlugin() {
   }
 }
 
+function pueblaDevPlugin() {
+  const BASE = 'https://rl.puebla.gob.mx'
+  return {
+    name: 'puebla-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/puebla', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          return res.end('Method Not Allowed')
+        }
+        let raw = ''
+        req.on('data', c => { raw += c })
+        req.on('end', async () => {
+          try {
+            const { placa = '', serie = '', folio = '' } = JSON.parse(raw)
+            const params = new URLSearchParams({
+              placa:       placa.trim().toUpperCase(),
+              numeroserie: serie.trim().toUpperCase(),
+              folio:       folio.trim(),
+            })
+            const upstream = await fetch(`${BASE}/api/ControlVehicular/ConsultaPagos?${params}`, {
+              headers: {
+                'Accept':     'application/json',
+                'Referer':    `${BASE}/PagosVehiculo`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              },
+            })
+            const data = await upstream.json()
+            res.statusCode = upstream.status
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify(data))
+          } catch (e) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: String(e) }))
+          }
+        })
+      })
+    },
+  }
+}
+
+function guerreroDevPlugin() {
+  const BUSCA_VEH = 'https://esefina.ingresos-guerrero.gob.mx/Tenencia/ModuloExterno/BuscaVeh.php'
+  const REFERER   = 'https://esefina.ingresos-guerrero.gob.mx/Tenencia/ModuloExterno/'
+  const HEADERS = {
+    'Content-Type':    'application/x-www-form-urlencoded',
+    'Referer':         REFERER,
+    'Origin':          'https://esefina.ingresos-guerrero.gob.mx',
+    'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'X-Requested-With': 'XMLHttpRequest',
+  }
+  return {
+    name: 'guerrero-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/guerrero', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          return res.end('Method Not Allowed')
+        }
+        let raw = ''
+        req.on('data', c => { raw += c })
+        req.on('end', async () => {
+          try {
+            const { placa = '', serie = '' } = JSON.parse(raw)
+            const base = {
+              serie: serie.trim().toUpperCase(),
+              placa: placa.trim().toUpperCase(),
+            }
+
+            const r1 = await fetch(BUSCA_VEH, {
+              method: 'POST',
+              headers: HEADERS,
+              body: new URLSearchParams({ ...base, opcion: '2' }).toString(),
+            })
+            const data1 = await r1.json()
+
+            if (data1.error == 1) {
+              res.setHeader('Content-Type', 'application/json')
+              return res.end(JSON.stringify({ encontrado: false, mensaje: data1.mensaje }))
+            }
+
+            const r2 = await fetch(BUSCA_VEH, {
+              method: 'POST',
+              headers: HEADERS,
+              body: new URLSearchParams({ ...base, opcion: '1' }).toString(),
+            })
+            const data2 = await r2.json()
+
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({
+              encontrado:  true,
+              liquidacion: data1.Liquidacion ?? [],
+              mensajeHtml: data1.mensaje ?? '',
+              vehiculo:    data2,
+            }))
+          } catch (e) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: String(e) }))
+          }
+        })
+      })
+    },
+  }
+}
+
 function zacatecasDevPlugin() {
   return {
     name: 'zacatecas-dev',
@@ -324,8 +432,110 @@ function zacatecasDevPlugin() {
   }
 }
 
+function cdmxDevPlugin() {
+  return {
+    name: 'cdmx-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/cdmx', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          return res.end('Method Not Allowed')
+        }
+        let raw = ''
+        req.on('data', c => { raw += c })
+        req.on('end', async () => {
+          try {
+            const { action, placa = '', captchaCode = '', sessionToken = '' } = JSON.parse(raw)
+
+            if (action === 'init') {
+              const pageRes = await fetch(`${CDMX_BASE}/consulta_adeudos`, {
+                headers: {
+                  'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  'Accept-Language': 'es-MX,es;q=0.9',
+                  'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+              })
+
+              const cookies    = extractCookiesDev(pageRes.headers)
+              const html       = await pageRes.text()
+              const csrf       = html.match(/csrf-token" content="([^"]+)"/)?.[1] ?? ''
+              const captchaUrl = html.match(/src="(https:\/\/data\.finanzas\.cdmx\.gob\.mx\/captcha\/flat\?[^"]+)"/)?.[1] ?? ''
+
+              if (!csrf || !captchaUrl) {
+                res.statusCode = 500
+                res.setHeader('Content-Type', 'application/json')
+                return res.end(JSON.stringify({ error: 'No se pudo cargar el portal de CDMX.' }))
+              }
+
+              const imgRes = await fetch(captchaUrl, {
+                headers: {
+                  'Cookie':     cookies,
+                  'Referer':    `${CDMX_BASE}/consulta_adeudos`,
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+              })
+
+              const imgBuffer = await imgRes.arrayBuffer()
+              const imgBase64 = Buffer.from(imgBuffer).toString('base64')
+              const token     = Buffer.from(JSON.stringify({ cookies, csrf })).toString('base64')
+
+              res.setHeader('Content-Type', 'application/json')
+              return res.end(JSON.stringify({
+                captchaImage: `data:image/png;base64,${imgBase64}`,
+                sessionToken: token,
+              }))
+            }
+
+            if (action === 'consulta') {
+              let cookies, csrf
+              try {
+                ;({ cookies, csrf } = JSON.parse(Buffer.from(sessionToken, 'base64').toString()))
+              } catch {
+                res.statusCode = 400
+                res.setHeader('Content-Type', 'application/json')
+                return res.end(JSON.stringify({ error: 'Sesión inválida. Recarga el captcha.' }))
+              }
+
+              const body = new URLSearchParams({
+                placa:        placa.trim().toUpperCase(),
+                captcha_code: captchaCode.trim(),
+              })
+
+              const queryRes = await fetch(`${CDMX_BASE}/consulta_adeudos/obtenAdeudos`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type':     'application/x-www-form-urlencoded; charset=UTF-8',
+                  'X-CSRF-TOKEN':     csrf,
+                  'X-Requested-With': 'XMLHttpRequest',
+                  'Referer':          `${CDMX_BASE}/consulta_adeudos`,
+                  'Cookie':           cookies,
+                  'User-Agent':       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+                body: body.toString(),
+              })
+
+              const data = await queryRes.json()
+              res.statusCode = queryRes.status
+              res.setHeader('Content-Type', 'application/json')
+              return res.end(JSON.stringify(data))
+            }
+
+            res.statusCode = 400
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: 'Acción no válida.' }))
+          } catch (e) {
+            res.statusCode = 500
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: String(e) }))
+          }
+        })
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [vue(), quintanarooDevPlugin(), michoacanDevPlugin(), chihuahuaDevPlugin(), chiapasDevPlugin(), zacatecasDevPlugin()],
+  plugins: [vue(), quintanarooDevPlugin(), michoacanDevPlugin(), chihuahuaDevPlugin(), chiapasDevPlugin(), zacatecasDevPlugin(), guerreroDevPlugin(), pueblaDevPlugin(), cdmxDevPlugin()],
   server: {
     proxy: {
       '/api/oaxaca': {
@@ -344,12 +554,6 @@ export default defineConfig({
         target: 'https://apifuncionarios.minayarit.gob.mx',
         changeOrigin: true,
         rewrite: (path) => path.replace('/api/nayarit', '/recaudacion/vehiculos-public'),
-      },
-      '/api/puebla': {
-        target: 'https://rl.puebla.gob.mx',
-        changeOrigin: true,
-        rewrite: () => '/api/AdeudoVehicular/CheckDebt',
-        headers: { Referer: 'https://rl.puebla.gob.mx/AdeudoVehicular' },
       },
       '/api/tlaxcala': {
         target: 'https://a-tenenciaonline.sefintlax.gob.mx',
